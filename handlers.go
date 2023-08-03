@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"github.com/shopspring/decimal"
+	"log"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 type Customer struct {
@@ -31,7 +33,7 @@ type OrderItem struct {
 	PricePerItem decimal.Decimal `json:"price_per_item"`
 }
 
-func getCustomersHandler(db *sql.DB) http.HandlerFunc {
+func GetCustomersHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query("SELECT customer_id, name, cpf, email FROM customers")
 		if err != nil {
@@ -55,7 +57,7 @@ func getCustomersHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func createCustomerHandler(db *sql.DB) http.HandlerFunc {
+func CreateCustomerHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var customer Customer
 		if err := json.NewDecoder(r.Body).Decode(&customer); err != nil {
@@ -86,11 +88,18 @@ func createCustomerHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// Respond with a JSON object containing a success message
+		response := map[string]string{
+			"message": "Customer registered successfully!",
+		}
+
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(response)
 	}
 }
 
-func getOrdersHandler(db *sql.DB) http.HandlerFunc {
+func GetOrdersHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query("SELECT o.order_id, c.customer_id, c.name, o.order_date, o.total_amount FROM orders o JOIN customers c on o.customer_id = c.customer_id")
 		if err != nil {
@@ -114,37 +123,85 @@ func getOrdersHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func createOrderHandler(db *sql.DB) http.HandlerFunc {
+func CreateOrderHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var order Order
-		if err := json.NewDecoder(r.Body).Decode(&order); err != nil {
+		var orderData struct {
+			Customer struct {
+				Name  string `json:"name"`
+				CPF   string `json:"cpf"`
+				Email string `json:"email"`
+			} `json:"customer"`
+
+			Products []struct {
+				ProductID int             `json:"product_id"`
+				Quantity  int             `json:"quantity"`
+				Price     decimal.Decimal `json:"price"`
+			} `json:"products"`
+
+			TotalAmount decimal.Decimal `json:"totalAmount"`
+			OrderDate   time.Time       `json:"order_date"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&orderData); err != nil {
 			http.Error(w, "invalid request payload", http.StatusBadRequest)
 			return
 		}
-		if order.CustomerID == 0 || order.OrderDate == "" || order.TotalAmount.IsZero() {
-			http.Error(w, "invalid or missing data in the request 1", http.StatusBadRequest)
+
+		if orderData.Customer.Name == "" {
+			http.Error(w, "Name field is required", http.StatusBadRequest)
 			return
 		}
-		result, err := db.Exec("INSERT INTO orders (customer_id, order_date, total_amount) VALUES ($1, $2, $3)",
-			order.CustomerID, order.OrderDate, order.TotalAmount)
+
+		if len(orderData.Products) == 0 {
+			http.Error(w, "Please add at least one product to the order", http.StatusBadRequest)
+			return
+		}
+
+		// Insert the customer details into the database
+		var customerID int
+		err := db.QueryRow("INSERT INTO customers (name, cpf, email) VALUES ($1, $2, $3) RETURNING customer_id",
+			orderData.Customer.Name, orderData.Customer.CPF, orderData.Customer.Email).Scan(&customerID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rowsAffected, err := result.RowsAffected()
+
+		// Insert the order into the database
+		var orderID int
+		err = db.QueryRow("INSERT INTO orders (customer_id, total_amount, order_date) VALUES ($1, $2, $3) RETURNING order_id",
+			customerID, orderData.TotalAmount, time.Now()).Scan(&orderID) // Use orderData.TotalAmount
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if rowsAffected != 1 {
-			http.Error(w, "error creating order", http.StatusInternalServerError)
+
+		// Insert the order items into the database
+		for _, product := range orderData.Products {
+			_, err = db.Exec("INSERT INTO order_items (order_id, product_id, quantity, price_per_item) VALUES ($1, $2, $3, $4)",
+				orderID, product.ProductID, product.Quantity, product.Price)
+			if err != nil {
+				log.Printf("Error inserting product with ID %d: %v", product.ProductID, err) // Log the problematic product ID
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		response := map[string]int{
+			"order_id": orderID,
+		}
+		jsonResponse, err := json.Marshal(response)
+		if err != nil {
+			log.Println("Error marshaling response:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
+		w.Write(jsonResponse)
 	}
 }
 
-func getOrderItemHandler(db *sql.DB) http.HandlerFunc {
+func GetOrderItemHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query("SELECT oi.order_id, oi.item_id, p.product_id, oi.quantity, p.price FROM order_items oi JOIN products p on oi.product_id = p.product_id")
 		if err != nil {
@@ -168,7 +225,7 @@ func getOrderItemHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func createOrderItemHandler(db *sql.DB) http.HandlerFunc {
+func CreateOrderItemHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var orderItems OrderItem
 		if err := json.NewDecoder(r.Body).Decode(&orderItems); err != nil {
@@ -209,7 +266,7 @@ func createOrderItemHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func getProductByIDHandler(db *sql.DB) http.HandlerFunc {
+func GetProductByIDHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Get the product_id from the URL query parameter
 		productIDStr := r.URL.Query().Get("product_id")
@@ -232,7 +289,7 @@ func getProductByIDHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func getProductsHandler(db *sql.DB) http.HandlerFunc {
+func GetProductsHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query("SELECT product_id, product_name, price FROM products")
 		if err != nil {
@@ -256,33 +313,22 @@ func getProductsHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func createProductsHandler(db *sql.DB) http.HandlerFunc {
+func CreateProductsHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
-	}
-}
-
-func addToOrderItemHandler(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var item OrderItem
-		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
-			http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		var product Product
+		if err := json.NewDecoder(r.Body).Decode(&product); err != nil {
+			http.Error(w, "invalid request payload", http.StatusBadRequest)
 			return
 		}
 
-		// Fetch the product price from the products table based on product_id
-		product := getProductByID(db, item.ProductID)
-		if product == nil {
-			http.Error(w, "Product not found", http.StatusNotFound)
+		if product.ProductName == "" {
+			http.Error(w, "Name field is required", http.StatusBadRequest)
 			return
 		}
 
-		// Calculate the price per item
-		item.PricePerItem = product.Price.Mul(decimal.NewFromInt(int64(item.Quantity)))
-
-		// Insert the order item into the database
-		result, err := db.Exec("INSERT INTO order_items (order_id, product_id, quantity, price_per_item) VALUES ($1, $2, $3, $4)",
-			item.OrderID, item.ProductID, item.Quantity, item.PricePerItem.String())
+		result, err := db.Exec("INSERT INTO products (product_name, price) VALUES ($1, $2)",
+			product.ProductName, product.Price)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -295,10 +341,73 @@ func addToOrderItemHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		if rowsAffected != 1 {
-			http.Error(w, "Error adding item to order", http.StatusInternalServerError)
+			http.Error(w, "error creating product", http.StatusInternalServerError)
 			return
 		}
 
 		w.WriteHeader(http.StatusCreated)
 	}
+}
+
+func AddToOrderItemHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var item OrderItem
+		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+			http.Error(w, "invalid request payload", http.StatusBadRequest)
+			return
+		}
+
+		// Fetch the product price from the products table based on product_id
+		productDetail := getProductByID(db, item.ProductID)
+		if productDetail == nil {
+			http.Error(w, "Product not found", http.StatusNotFound)
+			return
+		}
+
+		// Calculate the price per item
+		item.PricePerItem = productDetail.Price.Mul(decimal.NewFromInt(int64(item.Quantity)))
+
+		// Insert the order item into the database
+		_, err := db.Exec("INSERT INTO order_items (order_id, product_id, quantity, price_per_item) VALUES ($1, $2, $3, $4)",
+			item.OrderID, item.ProductID, item.Quantity, item.PricePerItem.String())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Update the total amount for the order in the orders table
+		_, err = db.Exec("UPDATE orders SET total_amount = total_amount + $1 WHERE order_id = $2",
+			item.PricePerItem.String(), item.OrderID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+func CalculateTotalAmount(db *sql.DB, products []struct {
+	ProductID int `json:"productID"`
+	Quantity  int `json:"quantity"`
+}) (decimal.Decimal, error) {
+	// Calculate the total amount based on the items in the products list
+	var totalAmount decimal.Decimal
+	for _, product := range products {
+		price, err := getProductPriceByID(db, product.ProductID)
+		if err != nil {
+			return decimal.Zero, err
+		}
+		totalAmount = totalAmount.Add(price.Mul(decimal.NewFromInt(int64(product.Quantity))))
+	}
+	return totalAmount, nil
+}
+
+func getProductPriceByID(db *sql.DB, productID int) (decimal.Decimal, error) {
+	var price decimal.Decimal
+	err := db.QueryRow("SELECT price FROM products WHERE product_id = $1", productID).Scan(&price)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return price, nil
 }

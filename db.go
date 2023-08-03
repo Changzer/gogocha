@@ -35,6 +35,18 @@ func createTables(db *sql.DB) error {
 		return err
 	}
 
+	// create products table
+
+	_, err = db.Exec(`
+	CREATE TABLE IF NOT EXISTS products(
+	    product_id SERIAL PRIMARY KEY,
+	    product_name VARCHAR(255) NOT NULL,
+	    price NUMERIC(10, 2)
+	)`)
+	if err != nil {
+		return err
+	}
+
 	// Create order_items table
 	_, err = db.Exec(`
 	CREATE TABLE IF NOT EXISTS order_items (
@@ -42,21 +54,13 @@ func createTables(db *sql.DB) error {
 	    order_id INTEGER NOT NULL,
 	    product_id INTEGER NOT NULL,
 	    quantity INTEGER NOT NULL,
+	    price_per_item NUMERIC (10, 2),
 	    FOREIGN KEY (order_id) REFERENCES orders(order_id),
 	    FOREIGN KEY (product_id) REFERENCES products(product_id)) `)
 	if err != nil {
 		return err
 	}
 
-	_, err = db.Exec(`
-	CREATE TABLE IF NOT EXISTS products (
-	    product_id SERIAL PRIMARY KEY,
-	    product_name VARCHAR(100) NOT NULL,
-	    price NUMERIC(10, 2) NOT NULL
-	)`)
-	if err != nil {
-		return err
-	}
 	return nil
 }
 

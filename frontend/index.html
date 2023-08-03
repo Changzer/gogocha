@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <title>Customer Registration and Order</title>
+</head>
+<body>
+<div id="customerForm">
+    <form id="registrationForm">
+        <label for="name">Name:</label>
+        <input id="name" required type="text"><br>
+
+        <label for="cpf">CPF:</label>
+        <input id="cpf" type="text"><br>
+
+        <label for="email">Email:</label>
+        <input id="email" type="email"><br>
+
+        <!-- Placeholder button, doesn't do anything for now -->
+        <button disabled type="button">Create Order</button>
+    </form>
+</div>
+
+<div id="productList"></div>
+<label for="quantity">Quantity:</label>
+<input id="quantity" min="1" type="number" value="1">
+<button id="addProduct" type="button">Add Product</button>
+
+<div id="orderSummary"></div>
+
+<form id="orderForm">
+    <button id="submitOrderButton" type="submit">Submit Order</button>
+</form>
+
+<script src="app.js"></script>
+</body>
+</html>

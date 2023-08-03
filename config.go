@@ -7,7 +7,7 @@ func getConnectionString() string {
 	port := "5432"
 	dbname := "gogocha"
 	user := "postgres"
-	password := "postgres"
+	password := "admin"
 
 	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		host, port, user, password, dbname)
